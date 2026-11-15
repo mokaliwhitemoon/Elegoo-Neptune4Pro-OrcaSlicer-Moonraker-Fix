@@ -1,22 +1,19 @@
-# OrcaSlicer 无法上传到 Klipper/Moonraker —— 四层问题叠加排查实录
+# OrcaSlicer 无法上传到 Klipper/Moonraker —— 3层问题叠加排查实录
 
 > 环境：Elegoo Neptune 4 Pro（已刷 MKS Pi + Armbian Buster + Klipper + Moonraker 1.0.5 + Fluidd 1.19.0）
 > 客户端：OrcaSlicer 2.5.1（Elegoo 定制版） / Windows 11
-> 日期：2026-11-15
-> 总耗时：约 3 小时
 
 ---
 
 ## TL;DR
 
-**四个独立问题叠加，最容易误判成「网络问题」。**
+**3个独立问题叠加，最容易误判成「网络问题」。**
 
 | # | 问题 | 根因 | 修复位置 |
 |---|---|---|---|
-| 1 | Orca 卡在下载 Bambu 插件 10% | 无关干扰项，海王星不需要 | 不用管 |
-| 2 | 上传报「无法解析服务器响应」 | `moonraker.conf` 缺 2 行 → 上传接口 500 | 打印机 |
-| 3 | Orca 主机类型没有 Moonraker 选项 | Elegoo 定制版 UI 锁死 | Orca 预设 JSON |
-| 4 | **打印时屏幕不进入打印模式** | **KlipperScreen 开机抢跑，订阅时 Moonraker 未就绪 → 503，此后永不重连** | 打印机 |
+| 1 | 上传报「无法解析服务器响应」 | `moonraker.conf` 缺 2 行 → 上传接口 500 | 打印机 |
+| 2 | Orca 主机类型没有 Moonraker 选项 | Elegoo 定制版 UI 锁死 | Orca 预设 JSON |
+| 3 | **打印时屏幕不进入打印模式** | **KlipperScreen 开机抢跑，订阅时 Moonraker 未就绪 → 503，此后永不重连** | 打印机 |
 
 ### 打印机侧（`moonraker.conf`）
 
@@ -37,6 +34,7 @@ queue_gcode_uploads: True      # ← 原来没有这行，默认 False
 ### 打印机侧（`KlipperScreen.conf`）
 
 **原文件只有 123 字节，全是注释，一行有效配置都没有：**
+也不知道这些家伙为什么要这么干（（（
 
 ```ini
 #~# --- Do not edit below this line. This section is auto generated --- #~#
@@ -69,43 +67,13 @@ theme = material-light
 
 ---
 
-## 一、表象与陷阱
+## 一、问题方向
 
-### 陷阱 1：Orca 弹「正在下载 Bambu 网络插件」卡在 10%
-
-**这个和你的机器完全无关，不要装。**
-
-- 海王星是 Klipper 机器，Bambu 网络插件是给拓竹 A1/X1/P1 系列用的
-- 卡住的原因不是网络慢，是 Orca 的进度算法问题
-
-**源码依据**（`GUI_App.cpp` → `download_plugin`）：
-
-```cpp
-int percent = 0;
-if (progress.dltotal != 0)
-    percent = progress.dlnow * 50 / progress.dltotal;
-
-if (pro_fn && ((percent - reported_percent) >= 10)) {
-    pro_fn(InstallStatusNormal, percent, was_cancel);
-    reported_percent = percent;
-}
-```
-
-两个要点：
-1. **百分比只占 0~50**（下载段算一半，解压段算另一半）
-2. **每变化 ≥10% 才刷新一次 UI** —— 意味着进度条要等文件下完 20% 才跳一格
-
-实测：47.8 MB 的包，348 KB/s（直连）/ 843 KB/s（走代理），跳一格约 30 秒。看起来像「卡死」，其实在动。
-
-最终 26 分钟后以 `curl: Transferred a partial file` 失败。
-
-**顺带一提**：`networking_plugins.zip.26072.tmp` 文件是空的——Orca 用 `std::ios::trunc` 打开，整个文件先读进内存，最后一次性落盘。所以**看 tmp 文件大小永远看不到进度**。
-
-### 陷阱 2：「无法解析服务器响应」
+### 陷阱 1：「无法解析服务器响应」
 
 这个报错**不是连不上**，是 Orca 拿到了非预期的响应格式。
 
-### 陷阱 3：主机类型选 Elegoo Link
+### 陷阱 2：主机类型选 Elegoo Link
 
 海王星 4 Pro 出厂确实支持 ElegooLink，但**刷了 Klipper 之后 ElegooLink 就不存在了**。Orca 却默认给它选了 Elegoo Link，请求打到 `http://IP/api/upload` → 404。
 
@@ -134,7 +102,7 @@ curl -s http://<PRINTER_IP>:7125/server/info
 
 `klippy_state: ready` + `failed_components: []` → **Klipper 和 Moonraker 都正常**。
 
-### 第 2 步：看 Moonraker 日志（关键！）
+### 第 2 步：看 Moonraker 日志（你要是敢不看你就敢改你也是人才）
 
 配置可以通过 HTTP 直接读，**不需要 SSH**：
 
@@ -218,9 +186,9 @@ log_path: /home/mks/klipper_logs
 queue_gcode_uploads: True       # ← 加这行
 ```
 
-### 重启 Moonraker（必须！）
+### 重启 Moonraker（你可以选择不重启你要是不重启跑不起来别怪我）
 
-**改了文件不等于生效**，内存里跑的还是旧配置。
+**改了文件不等于生效**，内存里跑的还是旧配置（很神奇对吧）
 
 Fluidd → 左侧齿轮 ⚙ → Service/System → 找 `moonraker` → Restart
 
@@ -319,7 +287,7 @@ case htMoonraker: return new Moonraker(config);
 
 ---
 
-## 五、踩坑清单（血泪版）
+## 五、踩坑清单（你猜猜我研究多久tm的一周）
 
 ### 1. `OrcaSlicer.conf` 有 MD5 校验
 
@@ -484,7 +452,7 @@ moonraker_port: 7125
 theme = material-light
 ```
 
-**⚠️ 注意：如果浏览器装了自动翻译插件，不要让它把配置翻译成中文！**
+**⚠️ 注意：如果浏览器装了自动翻译插件，不要让它把配置翻译成中文！（因为他翻译的东西真的会影响到你写的东西最好用原本语言去写我不要挂翻译）**
 
 翻译后变成这样就是错的，KlipperScreen 完全读不懂：
 
@@ -512,39 +480,9 @@ moonraker_port: 7125
 
 ---
 
-## 七、容易被误判成故障的正常现象
-
-排查过程中好几次差点误判，记下来避免别人重走弯路：
-
-### 1. 喷嘴卡在 140°C —— 这是正常的预热带
-
-看到屏幕显示 140°C、热床还在 67°C 时别慌。OrcaSlicer 生成的 gcode 温度顺序是：
-
-```gcode
-M104 S140     ← 喷嘴先升到 140°C 保温待命
-M190 S70      ← 等热床升到 70°C
-M109 S240     ← 热床到位后，喷嘴才升到 240°C 正式打印
-```
-
-**分两阶段是为了省时间**：热床加热慢（大面积），先让它跑，同时喷嘴在 140°C 保温（这个温度高于 `min_extrude_temp: 100`，但又不会挤出料）。
-
-正常耗时：热床 20→70°C 约 3-5 分钟，喷嘴 140→240°C 约 2-4 分钟。
-
-### 2. 屏幕显示 19/20°C —— 那时确实没加热
-
-如果照片拍的是预热开始前的状态，屏幕显示室温是对的。**别把这个当成「屏幕温度不对」的证据** —— 要判断屏幕是否正常，得在**加热过程中**对比网页端和屏幕端。
-
-### 3. 「料没粘上」—— 可能那时还没开始打
-
-温度分阶段意味着：前 5-8 分钟机器一直在预热，**根本不会出料**。看到「没料出来」不代表不粘，可能只是没到时间。
-
-### 4. 热床显示 71.3°C 但目标是 70°C —— PID 正常超调
-
-`pid_kp = 75.397`（热床）这个增益很高，升温时会超调 1-2 度然后回落。这是正常的 PID 行为，不是传感器坏了。
-
 ---
 
-## 八、验收标准
+## 七、验收标准
 
 全部通过才算修好：
 
@@ -635,13 +573,9 @@ force_logins: True      # 强制登录
 
 ---
 
-## 教训
-
-1. **先看日志再猜** —— `moonraker.log` 里 13:56 就写着 `500 POST /server/files/upload`，一查就定位。我却先在 Orca 界面里折腾了半天。
-2. **报错文字变化就是进展** —— 「无法解析服务器响应」→「HTTP 404」说明从连接层进到了协议层，不是倒退。
-3. **HTTP API 能读就不必 SSH** —— 省掉密码问题一大堆麻烦。
-4. **区分表象和根因** —— Bambu 插件下载卡住是个完全无关的干扰项，被它带偏了很久。
-5. **改配置要重启** —— 文件改了不等于服务读了。
+本身也是研究很久才搞定的一开始搞来搞去写了半天也不知道写出来一个什么屌玩意毕竟我也知道我自己的语言跟一坨屎似的
+希望这些能帮助到各位在研究自己打印机无法连接的问题
+本身也是算半个入门的新手只是会点语言罢了希望能帮助到各位如果有更好的改进方案的话也可以提出来加入项目帮忙改进一下特别感谢
 
 ---
 
